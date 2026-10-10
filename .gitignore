@@ -23,4 +23,9 @@ run
 runs
 run-data
 
+# Fabric development runtime
+config
+logs
+saves
+
 repo

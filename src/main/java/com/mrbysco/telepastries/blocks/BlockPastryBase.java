@@ -1,19 +1,10 @@
 package com.mrbysco.telepastries.blocks;
 
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.LevelReader;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.state.BlockBehaviour;
-import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.block.Block;
 
+/** Common marker retained from upstream for pastry blocks. */
 public class BlockPastryBase extends Block {
-
-	public BlockPastryBase(BlockBehaviour.Properties builder) {
-		super(builder);
-	}
-
-	@Override
-	public boolean canSurvive(BlockState state, LevelReader worldIn, BlockPos pos) {
-		return worldIn.getBlockState(pos.below()).isSolid();
-	}
+    public BlockPastryBase(Settings settings) {
+        super(settings);
+    }
 }

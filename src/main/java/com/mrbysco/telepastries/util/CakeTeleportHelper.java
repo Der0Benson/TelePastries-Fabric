@@ -1,366 +1,208 @@
 package com.mrbysco.telepastries.util;
 
-import com.mojang.datafixers.util.Pair;
-import com.mrbysco.telepastries.Reference;
 import com.mrbysco.telepastries.TelePastries;
 import com.mrbysco.telepastries.blocks.cake.BlockCakeBase;
 import com.mrbysco.telepastries.config.TeleConfig;
+import com.mrbysco.telepastries.data.TelePastriesPlayerData;
 import it.unimi.dsi.fastutil.longs.Long2BooleanArrayMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
-import net.minecraft.Util;
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.Mth;
-import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.dimension.DimensionType;
-import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.level.levelgen.feature.EndPlatformFeature;
-import net.minecraft.world.level.portal.DimensionTransition;
-import net.minecraft.world.phys.Vec3;
-import net.neoforged.fml.ModList;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.nbt.NbtCompound;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.TeleportTarget;
+import net.minecraft.world.World;
+import net.minecraft.world.Heightmap;
+import net.minecraft.world.dimension.DimensionType;
+import net.minecraft.world.gen.feature.EndPlatformFeature;
 import org.jetbrains.annotations.Nullable;
 
-public class CakeTeleportHelper {
+public final class CakeTeleportHelper {
+    private CakeTeleportHelper() {
+    }
 
-	private static final Object2ObjectMap<ResourceKey<Level>, LevelTeleportFinder> LEVEL_TELEPORTERS = Util.make(new Object2ObjectOpenHashMap<>(), map ->
-			map.put(ServerLevel.END, (entity, destWorld, minMaxBounds, cacheMap) -> toEnd(entity, destWorld))
-	);
+    public static TeleportTarget getCakeTeleportTarget(ServerWorld destination, Entity entity) {
+        entity.fallDistance = 0.0F;
+        if (entity instanceof LivingEntity living) {
+            living.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, 200, 200, false, false));
+        }
 
-	@Nullable
-	public static DimensionTransition getCakeTeleportData(ServerLevel destWorld, Entity entity) {
-		entity.fallDistance = 0;
-		if (entity instanceof LivingEntity livingEntity) { //Give resistance
-			livingEntity.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 200, 200, false, false));
-		}
+        Bounds bounds = customBounds(destination).clamp(destination.getBottomY(), destination.getTopY() - 1);
+        Long2BooleanArrayMap safetyCache = new Long2BooleanArrayMap();
+        BlockPos saved = getDimensionPosition(entity, destination.getRegistryKey());
+        if (saved != null && destination.getBlockState(saved.down()).isSolidBlock(destination, saved.down())
+                && isPositionSafe(entity, destination, saved, safetyCache, bounds)) {
+            return finish(destination, saved, entity);
+        }
 
-		// First, check if there is already an existing position to pull from
-		// If the position doesn't exist, use the current entity's current position clamped between the build heights
-		BlockPos spawnPos = getDimensionPosition(entity, destWorld.dimension());
+        if (destination.getRegistryKey().equals(World.END)) {
+            BlockPos endSpawn = ServerWorld.END_SPAWN_POS;
+            EndPlatformFeature.generate(destination, endSpawn.down(), true);
+            return finish(destination, endSpawn, entity);
+        }
 
-		// Cache map so that we don't need to run checking the specific block position each time
-		Long2BooleanArrayMap safeLocation = new Long2BooleanArrayMap();
+        TeleportTarget searched = searchAroundAndDown(entity, destination, bounds, safetyCache);
+        if (searched != null) return searched;
 
-		// Add compatibility bounds for checking the y-positions the entity can spawn
-		var minMaxBounds = customCompatBounds(destWorld).mapFirst(min -> Math.max(min, destWorld.getMinBuildHeight())).mapSecond(max -> Math.min(max, destWorld.getMaxBuildHeight()));
+        BlockPos current = entity.getBlockPos();
+        boolean currentInBounds = destination.getWorldBorder().contains(current)
+                && bounds.min < current.getY() - 1
+                && bounds.max > current.getY() + entity.getHeight() + 1;
+        int highestFallbackY = Math.max(bounds.min, bounds.max - MathHelper.ceil(entity.getHeight()) - 1);
+        int fallbackY = MathHelper.clamp(70, bounds.min, highestFallbackY);
+        BlockPos teleportPos = currentInBounds ? current : new BlockPos(0, fallbackY, 0);
+        buildSafetyCage(destination, teleportPos, entity);
+        return finish(destination, teleportPos, entity);
+    }
 
-		// If spawn position exists, verify position is safe
-		if (spawnPos != null && destWorld.getBlockState(spawnPos.relative(Direction.DOWN)).isSolid() && isPositionSafe(entity, destWorld, spawnPos, safeLocation, minMaxBounds)) {
-			return postProcessAndMake(destWorld, spawnPos, entity);
-		}
+    @Nullable
+    private static TeleportTarget searchAroundAndDown(Entity entity, ServerWorld destination, Bounds bounds,
+                                                       Long2BooleanArrayMap safetyCache) {
+        double scale = DimensionType.getCoordinateScaleFactor(
+                entity.getWorld().getDimension(), destination.getDimension());
+        BlockPos center = destination.getWorldBorder().clamp(
+                entity.getX() * scale, entity.getY(), entity.getZ() * scale);
+        int top = Math.min(bounds.max, destination.getBottomY() + destination.getLogicalHeight() - 1);
+        center = center.withY(top);
 
-		// Check level teleporter to determine portal info
-		@Nullable
-		DimensionTransition levelInfo = LEVEL_TELEPORTERS.getOrDefault(destWorld.dimension(), CakeTeleportHelper::searchAroundAndDown).determineTeleportLocation(entity, destWorld, minMaxBounds, safeLocation);
-		if (levelInfo != null) {
-			return levelInfo;
-		}
+        for (BlockPos horizontal : BlockPos.iterateOutwards(center, 16, 0, 16)) {
+            destination.getChunk(horizontal.getX() >> 4, horizontal.getZ() >> 4);
+            int surface = destination.getTopY(Heightmap.Type.MOTION_BLOCKING,
+                    horizontal.getX(), horizontal.getZ());
+            for (int y = Math.min(top, surface); y > bounds.min; --y) {
+                BlockPos check = new BlockPos(horizontal.getX(), y, horizontal.getZ());
+                if (destination.getBlockState(check.down()).isSolidBlock(destination, check.down())
+                        && isPositionSafe(entity, destination, check, safetyCache, bounds)) {
+                    return finish(destination, check, entity);
+                }
+            }
+        }
+        return null;
+    }
 
+    private static boolean isPositionSafe(Entity entity, ServerWorld destination, BlockPos position,
+                                          Long2BooleanArrayMap safetyCache, Bounds bounds) {
+        float halfWidth = entity.getWidth() / 2.0F;
+        for (BlockPos boxPos : BlockPos.iterate(
+                Math.round(position.getX() - halfWidth), position.getY(), Math.round(position.getZ() - halfWidth),
+                Math.round(position.getX() + halfWidth), Math.round(position.getY() + entity.getHeight()),
+                Math.round(position.getZ() + halfWidth))) {
+            if (!safetyCache.computeIfAbsent(boxPos.asLong(), ignored ->
+                    destination.getWorldBorder().contains(boxPos)
+                            && bounds.min < boxPos.getY()
+                            && bounds.max > boxPos.getY()
+                            && destination.getBlockState(boxPos).getBlock()
+                            .canMobSpawnInside(destination.getBlockState(boxPos)))) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-		// If none of these positions work, use the entity's current position and spawn and safety ring around them
-		// If the entity's position isn't within the world bounds, use default coordinates instead (0, 70, 0)
-		BlockPos teleportPos = destWorld.getWorldBorder().isWithinBounds(entity.blockPosition())
-				&& minMaxBounds.getFirst() < entity.blockPosition().getY() - 1
-				&& minMaxBounds.getSecond() > entity.blockPosition().getY() + entity.getBbHeight() + 1
-				? entity.blockPosition() : new BlockPos(0, Math.max(minMaxBounds.getFirst(), 70), 0);
-		var halfWidth = entity.getBbWidth() / 2;
-		int minX = Mth.floor(teleportPos.getX() - halfWidth - 1),
-				minY = teleportPos.getY() - 1,
-				minZ = Mth.floor(teleportPos.getZ() - halfWidth - 1),
-				maxX = Mth.ceil(teleportPos.getX() + halfWidth + 1),
-				maxY = Mth.ceil(teleportPos.getY() + entity.getBbHeight() + 1),
-				maxZ = Mth.ceil(teleportPos.getZ() + halfWidth + 1);
-		for (var pedestalPos : BlockPos.betweenClosed(minX, minY, minZ, maxX, maxY, maxZ)) {
-			// Don't do anything if the position is outside the world border
-			if (!destWorld.getWorldBorder().isWithinBounds(pedestalPos)) continue;
+    private static void buildSafetyCage(ServerWorld destination, BlockPos position, Entity entity) {
+        float halfWidth = entity.getWidth() / 2.0F;
+        int minX = MathHelper.floor(position.getX() - halfWidth - 1);
+        int minY = position.getY() - 1;
+        int minZ = MathHelper.floor(position.getZ() - halfWidth - 1);
+        int maxX = MathHelper.ceil(position.getX() + halfWidth + 1);
+        int maxY = MathHelper.ceil(position.getY() + entity.getHeight() + 1);
+        int maxZ = MathHelper.ceil(position.getZ() + halfWidth + 1);
 
-			// Get the block position to check
-			BlockState pedestalState = destWorld.getBlockState(pedestalPos);
+        for (BlockPos cagePos : BlockPos.iterate(minX, minY, minZ, maxX, maxY, maxZ)) {
+            if (!destination.getWorldBorder().contains(cagePos)) continue;
+            BlockState state = destination.getBlockState(cagePos);
+            if (state.getBlock() instanceof BlockCakeBase) continue;
 
-			// Don't do anything if the block is a cake
-			if (pedestalState.getBlock() instanceof BlockCakeBase) continue;
+            if (cagePos.getY() == minY && !state.isSolidBlock(destination, cagePos)) {
+                destination.setBlockState(cagePos, Blocks.OBSIDIAN.getDefaultState());
+            } else if ((cagePos.getY() == maxY || cagePos.getX() == minX || cagePos.getX() == maxX
+                    || cagePos.getZ() == minZ || cagePos.getZ() == maxZ) && !state.isSolidBlock(destination, cagePos)) {
+                destination.setBlockState(cagePos, Blocks.COBBLESTONE.getDefaultState());
+            } else if (!state.getBlock().canMobSpawnInside(state)) {
+                destination.setBlockState(cagePos, Blocks.AIR.getDefaultState());
+            }
+        }
+    }
 
-			// If the position is beneath the entity and isn't solid, set to obsidian
-			if (pedestalPos.getY() == minY && !pedestalState.isSolid())
-				destWorld.setBlockAndUpdate(pedestalPos, Blocks.OBSIDIAN.defaultBlockState());
-				// Otherwise, if the position is surrounding the entity and isn't solid, set to cobblestone
-			else if ((pedestalPos.getY() == maxY || pedestalPos.getX() == minX || pedestalPos.getX() == maxX || pedestalPos.getZ() == minZ || pedestalPos.getZ() == maxZ) && !pedestalState.isSolid())
-				destWorld.setBlockAndUpdate(pedestalPos, Blocks.COBBLESTONE.defaultBlockState());
-				// Otherwise, just set to air if the entity can't spawn in it
-			else if (!pedestalState.getBlock().isPossibleToRespawnInThis(pedestalState))
-				destWorld.setBlockAndUpdate(pedestalPos, Blocks.AIR.defaultBlockState());
-		}
+    public static void addDimensionPosition(ServerPlayerEntity player, RegistryKey<World> dimension, BlockPos position) {
+        NbtCompound data = ((TelePastriesPlayerData) player).telepastries$getDimensionPositions();
+        BlockPos saved = dimension.equals(World.END) ? ServerWorld.END_SPAWN_POS : position;
+        data.putLong(key(dimension), saved.asLong());
+        TelePastries.LOGGER.debug("Setting {}'s position in {} to {}", player.getName().getString(),
+                dimension.getValue(), saved);
+    }
 
-		// Create info
-		return postProcessAndMake(destWorld, teleportPos, entity);
-	}
+    @Nullable
+    public static BlockPos getDimensionPosition(Entity entity, RegistryKey<World> dimension) {
+        if (!(entity instanceof TelePastriesPlayerData playerData)) return null;
+        NbtCompound data = playerData.telepastries$getDimensionPositions();
+        String key = key(dimension);
+        if (!data.contains(key)) return null;
+        BlockPos position = BlockPos.fromLong(data.getLong(key));
+        TelePastries.LOGGER.debug("Found {}'s position in {}: {}", entity.getName().getString(),
+                dimension.getValue(), position);
+        return position;
+    }
 
-	/**
-	 * Search eight blocks around the current block and check down to determine where to teleport.
-	 *
-	 * @param entity       the entity attempting to spawn at the location
-	 * @param destWorld    the level the entity is teleporting to
-	 * @param cacheMap     a cache to prevent additional lookups to the position
-	 * @param minMaxBounds the bounds of the y position the entity can spawn within
-	 * @return the portal information to teleport to, or {@code null} if there is none
-	 */
-	@Nullable
-	private static DimensionTransition searchAroundAndDown(Entity entity, ServerLevel destWorld, Pair<Integer, Integer> minMaxBounds, Long2BooleanArrayMap cacheMap) {
-		// Set y position to max possible
-		double dimensionScale = DimensionType.getTeleportationScale(entity.level().dimensionType(), destWorld.dimensionType());
-		BlockPos spawnPos = destWorld.getWorldBorder().clampToBounds(entity.blockPosition().getX() * dimensionScale, entity.blockPosition().getY(), entity.blockPosition().getZ() * dimensionScale)
-				.atY(Math.min(minMaxBounds.getSecond(), destWorld.getMinBuildHeight() + destWorld.getLogicalHeight()) - 1);
+    private static String key(RegistryKey<World> dimension) {
+        return dimension.getValue().toString();
+    }
 
-		// No spawn position or isn't valid, so loop around location
-		for (var checkPos : BlockPos.spiralAround(spawnPos, 16, Direction.EAST, Direction.SOUTH)) {
-			// Load chunk to actually check the location
-			destWorld.getChunk(checkPos);
+    private static Bounds customBounds(ServerWorld destination) {
+        TeleConfig.Values config = TeleConfig.COMMON;
+        if (matches(destination, config.customCakeDimension)) {
+            return new Bounds(config.customCakeMinY, config.customCakeMaxY);
+        }
+        if (matches(destination, config.customCake2Dimension)) {
+            return new Bounds(config.customCake2MinY, config.customCake2MaxY);
+        }
+        if (matches(destination, config.customCake3Dimension)) {
+            return new Bounds(config.customCake3MinY, config.customCake3MaxY);
+        }
+        return new Bounds(Integer.MIN_VALUE, Integer.MAX_VALUE);
+    }
 
-			// Cycle through positions from top to bottom
-			for (int heightY = Math.min(spawnPos.getY(), destWorld.getHeight(Heightmap.Types.MOTION_BLOCKING, checkPos.getX(), checkPos.getZ())); heightY > minMaxBounds.getFirst(); --heightY) {
-				checkPos.setY(heightY);
+    private static boolean matches(ServerWorld destination, String configuredId) {
+        Identifier id = Identifier.tryParse(configuredId);
+        return id != null && destination.getRegistryKey().equals(RegistryKey.of(RegistryKeys.WORLD, id));
+    }
 
-				// Since we are checking going down, we want to verify the player is on the floor
-				// Check the player position afterward
-				if (!destWorld.getBlockState(checkPos.immutable().relative(Direction.DOWN)).isSolid()
-						|| !isPositionSafe(entity, destWorld, checkPos, cacheMap, minMaxBounds)
-				) continue;
+    private static TeleportTarget finish(ServerWorld destination, BlockPos position, Entity entity) {
+        RegistryKey<World> destinationKey = destination.getRegistryKey();
+        if (entity instanceof ServerPlayerEntity player) {
+            if (destinationKey.equals(World.OVERWORLD)
+                    || FabricLoader.getInstance().isModLoaded("twilightforest")
+                    && destinationKey.getValue().equals(Identifier.of("twilightforest", "twilight_forest"))
+                    || FabricLoader.getInstance().isModLoaded("lostcities")
+                    && destinationKey.getValue().equals(Identifier.of("lostcities", "lostcity"))) {
+                player.setSpawnPoint(destinationKey, position, player.getYaw(), true, false);
+            }
+        }
+        return new TeleportTarget(destination,
+                new Vec3d(position.getX(), position.getY(), position.getZ()),
+                Vec3d.ZERO, entity.getYaw(), entity.getPitch(), TeleportTarget.NO_OP);
+    }
 
-				// All positions the entity is in is safe, so spawn in that location
-				return postProcessAndMake(destWorld, checkPos, entity);
-			}
-		}
-
-		// If it fails, return null
-		return null;
-	}
-
-	/**
-	 * Set the portal information to the end's spawn point.
-	 *
-	 * @param entity    the entity attempting to spawn at the location
-	 * @param destWorld the level the entity is teleporting to
-	 * @return the portal information to teleport to, or {@code null} if there is none
-	 * @deprecated this should be removed in favor of a datagen solution
-	 */
-	@Deprecated
-	private static DimensionTransition toEnd(Entity entity, ServerLevel destWorld) {
-		// Get teleport position
-		BlockPos teleportPos = ServerLevel.END_SPAWN_POINT;
-		Vec3 vec3 = teleportPos.getBottomCenter();
-		EndPlatformFeature.createEndPlatform(destWorld, BlockPos.containing(vec3).below(), true);
-
-		return postProcessAndMake(destWorld, teleportPos, entity);
-	}
-
-	/**
-	 * Checks if all blocks within the entity's bounding box is safe to spawn in.
-	 *
-	 * @param entity       the entity attempting to spawn at the location
-	 * @param destWorld    the level the entity is teleporting to
-	 * @param checkPos     the position the entity is trying to be spawned at
-	 * @param cacheMap     a cache to prevent additional lookups to the position
-	 * @param minMaxBounds the bounds of the y position the entity can spawn within
-	 * @return {@code true} if it is safe for the entity to spawn here, {@code false} otherwise
-	 */
-	private static boolean isPositionSafe(Entity entity, ServerLevel destWorld, BlockPos checkPos, Long2BooleanArrayMap cacheMap, Pair<Integer, Integer> minMaxBounds) {
-		var halfWidth = entity.getBbWidth() / 2;
-		// We construct the position based on the entity radius
-		// We could use the AABB method; however we want to account fo edge cases where the entity is touching a corner with
-		// the box, causing the safety check to fail and change the spawn position.
-		// This is also why we round to the higher or lower value
-		for (var entityBoxPos : BlockPos.betweenClosed(
-				Math.round(checkPos.getX() - halfWidth),
-				checkPos.getY(),
-				Math.round(checkPos.getZ() - halfWidth),
-				Math.round(checkPos.getX() + halfWidth),
-				Math.round(checkPos.getY() + entity.getBbHeight()),
-				Math.round(checkPos.getZ() + halfWidth)
-		)) {
-			// If a safe position isn't found in the entity is in, move to next spot to check
-			if (!cacheMap.computeIfAbsent(
-					entityBoxPos.asLong(),
-					c -> {
-						// Check if position is within bounds or that the position's min build height is higher than the spawning position
-						if (!destWorld.getWorldBorder().isWithinBounds(entityBoxPos) || minMaxBounds.getFirst() >= entityBoxPos.getY())
-							return false;
-						// Get block state and check if it is possible to respawn
-						BlockState entityBoxState = destWorld.getBlockState(entityBoxPos);
-						return entityBoxState.getBlock().isPossibleToRespawnInThis(entityBoxState);
-					}
-			)) {
-				return false;
-			}
-		}
-
-		// If nothing fails, it is a safe location
-		return true;
-	}
-
-	public static void addDimensionPosition(Entity entityIn, ResourceKey<Level> dim, BlockPos position) {
-		CompoundTag entityData = entityIn.getPersistentData();
-		CompoundTag data = getTag(entityData);
-		ResourceLocation dimLocation = dim.location();
-
-		BlockPos usedPos;
-		if (dim == Level.END) {
-			BlockPos spawnPlatform = ServerLevel.END_SPAWN_POINT;
-			usedPos = spawnPlatform;
-			data.putLong(Reference.MOD_PREFIX + dimLocation, spawnPlatform.asLong());
-		} else {
-			Component name = entityIn instanceof Player ? entityIn.getDisplayName() : entityIn.getName();
-			usedPos = position;
-			data.putLong(Reference.MOD_PREFIX + dimLocation, position.asLong());
-		}
-		TelePastries.LOGGER.debug("Setting {}'s position of {} to: {}", getEntityName(entityIn), dimLocation, usedPos);
-		entityData.put(Player.PERSISTED_NBT_TAG, data);
-	}
-
-	private static String getEntityName(Entity entityIn) {
-		Component name = entityIn instanceof Player ? entityIn.getDisplayName() : entityIn.getName();
-		if (name == null) {
-			name = Component.literal(entityIn.getType().toString());
-		}
-		return name.getString();
-	}
-
-	@Nullable
-	public static BlockPos getDimensionPosition(Entity entityIn, ResourceKey<Level> dim) {
-		CompoundTag entityData = entityIn.getPersistentData();
-		CompoundTag data = getTag(entityData);
-		ResourceLocation dimLocation = dim.location();
-
-		if (data.contains(Reference.MOD_PREFIX + dimLocation)) {
-			BlockPos dimPos = BlockPos.of(data.getLong(Reference.MOD_PREFIX + dimLocation));
-			TelePastries.LOGGER.debug("Found {}'s position of {} to: {}", getEntityName(entityIn), dimLocation, dimPos);
-			return dimPos;
-		}
-
-		TelePastries.LOGGER.debug("Could not find {}'s previous location. Using current location", getEntityName(entityIn));
-		return null;
-	}
-
-	private static CompoundTag getTag(CompoundTag tag) {
-		if (tag == null || !tag.contains(Player.PERSISTED_NBT_TAG)) {
-			return new CompoundTag();
-		}
-		return tag.getCompound(Player.PERSISTED_NBT_TAG);
-	}
-
-	/**
-	 * Returns the minimum and maximum y values the entity can spawn between.
-	 *
-	 * @param destWorld the level the entity is teleporting to
-	 * @return The bounded y values the entity must spawn in-between
-	 */
-	private static Pair<Integer, Integer> customCompatBounds(ServerLevel destWorld) {
-		ResourceLocation customLocation = ResourceLocation.tryParse(TeleConfig.COMMON.customCakeDimension.get());
-		if (customLocation != null) {
-			ResourceKey<Level> customWorldKey = ResourceKey.create(Registries.DIMENSION, customLocation);
-			if (destWorld.dimension() == customWorldKey) {
-				int minY = TeleConfig.COMMON.customCakeMinY.get();
-				int maxY = TeleConfig.COMMON.customCakeMaxY.get();
-				return Pair.of(minY, maxY);
-			}
-		}
-
-		ResourceLocation customLocation2 = ResourceLocation.tryParse(TeleConfig.COMMON.customCake2Dimension.get());
-		if (customLocation2 != null) {
-			ResourceKey<Level> customWorldKey = ResourceKey.create(Registries.DIMENSION, customLocation2);
-			if (destWorld.dimension() == customWorldKey) {
-				int minY = TeleConfig.COMMON.customCake2MinY.get();
-				int maxY = TeleConfig.COMMON.customCake2MaxY.get();
-				return Pair.of(minY, maxY);
-			}
-		}
-
-		ResourceLocation customLocation3 = ResourceLocation.tryParse(TeleConfig.COMMON.customCake3Dimension.get());
-		if (customLocation3 != null) {
-			ResourceKey<Level> customWorldKey = ResourceKey.create(Registries.DIMENSION, customLocation3);
-			if (destWorld.dimension() == customWorldKey) {
-				int minY = TeleConfig.COMMON.customCake3MinY.get();
-				int maxY = TeleConfig.COMMON.customCake3MaxY.get();
-				return Pair.of(minY, maxY);
-			}
-		}
-
-		return Pair.of(Integer.MIN_VALUE, Integer.MAX_VALUE);
-	}
-
-	/**
-	 * Sets the spawn location of the entity in compatible levels.
-	 *
-	 * @param destWorld the level the entity is teleporting to
-	 * @param pos       the position the entity is trying to be spawned at
-	 * @param entity    the entity attempting to spawn at the location
-	 */
-	private static DimensionTransition postProcessAndMake(ServerLevel destWorld, BlockPos pos, Entity entity) {
-		// Set overworld back to respawn position when using cake.
-		if (destWorld.dimension() == Level.OVERWORLD) {
-			if (entity instanceof ServerPlayer serverPlayer) {
-				serverPlayer.setRespawnPosition(Level.OVERWORLD, pos, serverPlayer.getYRot(), true, false);
-			}
-		}
-
-		if (ModList.get().isLoaded("twilightforest")) {
-			ResourceKey<Level> twilightKey = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath("twilightforest", "twilight_forest"));
-			if (destWorld.dimension() == twilightKey) {
-				if (entity instanceof ServerPlayer serverPlayer) {
-					serverPlayer.setRespawnPosition(twilightKey, pos, serverPlayer.getYRot(), true, false);
-				}
-			}
-		}
-
-		if (ModList.get().isLoaded("lostcities")) {
-			ResourceKey<Level> lostCityKey = ResourceKey.create(Registries.DIMENSION, ResourceLocation.fromNamespaceAndPath("lostcities", "lostcity"));
-			if (destWorld.dimension() == lostCityKey) {
-				if (entity instanceof ServerPlayer serverPlayer) {
-					serverPlayer.setRespawnPosition(lostCityKey, pos, serverPlayer.getYRot(), true, false);
-				}
-			}
-		}
-
-		return makePortalInfo(destWorld, entity, pos.getX(), pos.getY(), pos.getZ());
-	}
-
-	private static DimensionTransition makePortalInfo(ServerLevel destination, Entity entity, double x, double y, double z) {
-		return makePortalInfo(destination, entity, new Vec3(x, y, z));
-	}
-
-	private static DimensionTransition makePortalInfo(ServerLevel destination, Entity entity, Vec3 pos) {
-		return new DimensionTransition(destination, pos, Vec3.ZERO, entity.getYRot(), entity.getXRot(), DimensionTransition.DO_NOTHING);
-	}
-
-	/**
-	 * A location finder for determining where to teleport the entity in a given level.
-	 */
-	@FunctionalInterface
-	interface LevelTeleportFinder {
-
-		/**
-		 * Determine where to teleport the entity for the given level.
-		 *
-		 * @param entity       the entity attempting to spawn at the location
-		 * @param destWorld    the level the entity is teleporting to
-		 * @param cacheMap     a cache to prevent additional lookups to the position
-		 * @param minMaxBounds the bounds of the y position the entity can spawn within
-		 * @return the portal information to teleport to, or {@code null} if there is none
-		 */
-		@Nullable
-		DimensionTransition determineTeleportLocation(Entity entity, ServerLevel destWorld, Pair<Integer, Integer> minMaxBounds, Long2BooleanArrayMap cacheMap);
-	}
+    private record Bounds(int min, int max) {
+        Bounds clamp(int worldMin, int worldMax) {
+            int clampedMin = Math.max(min, worldMin);
+            int clampedMax = Math.min(max, worldMax);
+            if (clampedMin >= clampedMax) {
+                return new Bounds(worldMin, worldMax);
+            }
+            return new Bounds(clampedMin, clampedMax);
+        }
+    }
 }

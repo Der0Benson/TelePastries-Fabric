@@ -1,17 +1,14 @@
 package com.mrbysco.telepastries.item;
 
 import com.mrbysco.telepastries.config.TeleConfig;
-import net.minecraft.network.chat.Component;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.Block;
+import net.minecraft.block.Block;
+import net.minecraft.item.ItemStack;
+import net.minecraft.text.Text;
 
 public class CustomCakeBlockItem extends CakeBlockItem {
-	public CustomCakeBlockItem(Block blockIn, Properties builder) {
-		super(blockIn, builder);
-	}
+    public CustomCakeBlockItem(Block block, Settings settings) { super(block, settings); }
 
-	@Override
-	public Component getName(ItemStack stack) {
-		return Component.translatable(this.getDescriptionId(stack), TeleConfig.COMMON.customCakeName.get());
-	}
+    @Override public Text getName(ItemStack stack) {
+        return Text.translatable(getTranslationKey(stack), TeleConfig.COMMON.customCakeName);
+    }
 }

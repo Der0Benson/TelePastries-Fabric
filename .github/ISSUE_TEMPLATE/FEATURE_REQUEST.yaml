@@ -1,28 +1,33 @@
-name: 💡 Suggestions
-description: For suggesting changes / additions
-title: "[Suggestion]: "
-labels: [suggestion, enhancement]
+name: Verbesserungsvorschlag
+description: Eine Änderung oder Ergänzung für die Fabric-Portierung vorschlagen
+title: "[Vorschlag]: "
+labels: [enhancement]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out the feature request!
-  - type: checkboxes
-    id: general-info
-    attributes:
-      label: General Info
-      description: You may select more than one.
-      options:
-        - label: I would like to propose new content
-        - label: I would like to propose changes
-        - label: I would like to propose another thing
-    validations:
-      required: false
+        Danke für deinen Vorschlag. Änderungen sollten zum Umfang und Spielgefühl des Originalprojekts passen.
+
   - type: textarea
-    id: suggestion-description
+    id: motivation
     attributes:
-      label: Suggestion Description
-      description: Tell us your suggestion
-      placeholder: I want this to happen
+      label: Ausgangslage
+      description: Welches Problem oder welcher fehlende Anwendungsfall soll gelöst werden?
     validations:
       required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Vorgeschlagene Lösung
+      description: Beschreibe die gewünschte Änderung möglichst konkret.
+    validations:
+      required: true
+
+  - type: textarea
+    id: upstream
+    attributes:
+      label: Bezug zum Originalprojekt
+      description: Falls das Original diese Funktion bereits besitzt, bitte auf die entsprechende Stelle verweisen.
+    validations:
+      required: false

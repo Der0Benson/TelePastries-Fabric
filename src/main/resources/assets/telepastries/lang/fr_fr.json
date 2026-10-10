@@ -3,7 +3,7 @@
     "telepastries.config.title": "Configuration de TelePastries",
 
     "_comment": "Creative Tab",
-    "itemGroup.tele_tab": "TelePastries",
+    "itemGroup.tele_tab": "TelePastries Fabric",
 
     "_comment": "Block",
     "block.telepastries.nether_cake": "Gâteau du Nether",

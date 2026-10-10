@@ -3,7 +3,7 @@
     "telepastries.config.title": "传送蛋糕配置",
 
     "_comment": "Creative Tab",
-    "itemGroup.tele_tab": "传送蛋糕",
+    "itemGroup.tele_tab": "TelePastries Fabric",
 
     "_comment": "Block",
     "block.telepastries.nether_cake": "下界蛋糕",

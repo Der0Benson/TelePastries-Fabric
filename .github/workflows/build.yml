@@ -1,37 +1,41 @@
-name: Build and Maven
+name: Fabric-Build
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: ["fabric-1.21.1"]
+  pull_request:
+    branches: ["fabric-1.21.1"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Mit Java 21 bauen
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 21
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Java 21 einrichten
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: 21
-          cache: 'gradle'
-      - name: Make gradlew executable
+
+      - name: Gradle einrichten
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle-Wrapper ausführbar machen
         run: chmod +x ./gradlew
-      - name: Build with Gradle
-        run: ./gradlew build
-      - uses: actions/upload-artifact@v4
+
+      - name: Fabric-Mod bauen
+        run: ./gradlew --no-daemon build
+
+      - name: JARs als Artefakt speichern
+        uses: actions/upload-artifact@v4
         with:
-          path: ./build/libs/
-      - name: Publish to maven
-        if: contains(github.event.head_commit.message, '[push]') || contains(github.event.head_commit.message, '[build]')
-        env:
-          SAP_SECRET: ${{ secrets.SAP_SECRET }}
-        run: ./gradlew publish
-      - name: Publish To Curseforge
-        if: contains(github.event.head_commit.message, '[publish]') || contains(github.event.head_commit.message, '[curseforge]')
-        env:
-          CURSEFORGE_KEY: ${{ secrets.CURSEFORGE_KEY }}
-        run: ./gradlew curseforge --stacktrace
-      - name: Publish To Modrinth
-        if: contains(github.event.head_commit.message, '[publish]') || contains(github.event.head_commit.message, '[modrinth]')
-        env:
-          MODRINTH_KEY: ${{ secrets.MODRINTH_KEY }}
-        run: ./gradlew modrinth --stacktrace
+          name: TelePastries-Fabric-1.21.1
+          path: build/libs/*.jar
+          if-no-files-found: error

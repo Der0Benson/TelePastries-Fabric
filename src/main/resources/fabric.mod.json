@@ -17,6 +17,7 @@
     "issues": "https://github.com/Der0Benson/TelePastries-Fabric/issues"
   },
   "license": "MIT",
+  "icon": "assets/telepastries/icon.png",
   "environment": "*",
   "entrypoints": {
     "main": [

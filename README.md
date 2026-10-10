@@ -1,5 +1,9 @@
 # TelePastries Fabric
 
+<p align="center">
+  <img src="src/main/resources/assets/telepastries/icon.png" alt="TelePastries Fabric Icon" width="256">
+</p>
+
 [![Fabric-Build](https://github.com/Der0Benson/TelePastries-Fabric/actions/workflows/build.yml/badge.svg?branch=fabric-1.21.1)](https://github.com/Der0Benson/TelePastries-Fabric/actions/workflows/build.yml)
 [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-green.svg)](LICENSE)
 

@@ -1,6 +1,6 @@
 # Änderungsprotokoll
 
-## 0.11.2-fabric.5
+## 0.11.2-fabric.6
 
 - Vollständige Portierung von NeoForge auf Fabric für Minecraft 1.21.1
 - Serverseitige und sichere Teleportation zwischen Dimensionen
@@ -11,6 +11,7 @@
 - Explosionsschutz ohne versionsabhängiges Explosions-Mixin
 - Bedingtes Twilight-Forest-Rezept für Fabric
 - Korrekte Unterstützung des älteren Bett-Konfigurationswerts
+- Übersichtliche JAR-Dateinamen im Format `TelePastries-Fabric-1.21.1 v0.11.2.jar`
 
 ## Basisversion 0.11.2
 

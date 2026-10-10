@@ -32,7 +32,7 @@ body:
     id: mod
     attributes:
       label: TelePastries-Version
-      placeholder: Zum Beispiel 0.11.2-fabric.5
+      placeholder: Zum Beispiel 0.11.2-fabric.6
     validations:
       required: true
 

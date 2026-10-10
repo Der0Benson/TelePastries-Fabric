@@ -68,7 +68,7 @@ Unter Linux oder macOS:
 Die fertige Fabric-JAR liegt anschließend unter:
 
 ```text
-build/libs/TelePastries-Fabric-1.21.1-0.11.2-fabric.5.jar
+build/libs/TelePastries-Fabric-1.21.1 v0.11.2.jar
 ```
 
 ## Verhältnis zum Originalprojekt

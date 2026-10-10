@@ -10,6 +10,9 @@ base {
     archivesName = project.archives_base_name
 }
 
+def displayVersion = project.mod_version.tokenize('-')[0]
+def releaseFileStem = "${project.archives_base_name} v${displayVersion}"
+
 repositories {
     mavenCentral()
 }
@@ -63,6 +66,14 @@ java {
     withSourcesJar()
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.named('remapJar') {
+    archiveFileName = "${releaseFileStem}.jar"
+}
+
+tasks.named('remapSourcesJar') {
+    archiveFileName = "${releaseFileStem}-sources.jar"
 }
 
 jar {
